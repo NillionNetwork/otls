@@ -1,0 +1,39 @@
+version: '3'
+
+services:
+  otls1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/opt/primus/otls
+    ports:
+      - "12345:12345"
+    working_dir: /opt/primus/otls
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      otls_network:
+        ipv4_address: 172.28.0.2
+
+  otls2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./:/opt/primus/otls
+    working_dir: /opt/primus/otls
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      otls_network:
+        ipv4_address: 172.28.0.3
+
+networks:
+  otls_network:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16 

@@ -1,7 +1,12 @@
 #ifndef PRIMUS_COM_COV_H
 #define PRIMUS_COM_COV_H
 #include <openssl/bn.h>
+#include <openssl/ec.h>
+#include <openssl/ecdsa.h>
+#include <openssl/pem.h>
 #include <string.h>
+#include <string>
+#include <numeric>
 
 #include "backend/bn_utils.h"
 #include "backend/ole.h"
@@ -87,6 +92,15 @@ class ComConv {
     block com_seed;
     OLE<IO>* ole;
     vector<BIGNUM*> exp;
+    
+    // Signature storage members
+    vector<unsigned char*> signatures_der;
+    vector<int> signature_lengths;
+    bool signatures_valid = false;
+
+    // Legacy public key storage (used by verify function)
+    unsigned char* public_key_bytes = nullptr;
+    int public_key_len = 0;
 
     ComConv(IO* io, COT<IO>* ot, BIGNUM* q2, block bDelta) : io(io) {
         q = BN_new();
@@ -113,6 +127,18 @@ class ComConv {
             BN_free(exp[i]);
         BN_free(q);
         delete ole;
+        
+        // Clean up signature data
+        for (auto sig_der : signatures_der) {
+            OPENSSL_free(sig_der);
+        }
+        signatures_der.clear();
+        signature_lengths.clear();
+        
+        if (public_key_bytes != nullptr) {
+            OPENSSL_free(public_key_bytes);
+            public_key_bytes = nullptr;
+        }
     }
 
     void compute_hash(unsigned char res[Hash::DIGEST_SIZE],
@@ -172,9 +198,10 @@ class ComConv {
         msg.resize(bKEYs.size());
         for (size_t i = 0; i < bKEYs.size(); ++i)
             msg[i] = BN_new();
-
+        // Step 3(a) from paper
         convert(msg, aKEYs, bKEYs, bDelta, aDelta);
         for (size_t i = 0; i < msg.size(); ++i)
+            // msg[i] is W[i] from paper
             send_bn(io, msg[i], &hash);
 
         hash.digest(msg_com);
@@ -305,6 +332,7 @@ class ComConv {
         for (size_t i = 0; i < aKEYs.size(); i++) {
             aKEYs[i] = BN_new();
         }
+        // Step 3(a) from paper
         convert_send(aKEYs, bKEYs);
         //  separate input bits into chunks with batch_size bits each.
         size_t chunk_len = (bKEYs.size() + batch_size - 1) / batch_size;
@@ -331,12 +359,14 @@ class ComConv {
             chi_hash.put(buf, 65);
             EC_POINT_oct2point(pc.group, com[i], buf, 65, ctx);
         }
+
         // receive commitment of r.
         EC_POINT* comm_r = EC_POINT_new(pc.group);
         io->recv_data(buf, 65);
         chi_hash.put(buf, 65);
         EC_POINT_oct2point(pc.group, comm_r, buf, 65, ctx);
         delete[] buf;
+
         // generate and send chi's.
         vector<BIGNUM*> chi(chunk_len);
         for (size_t i = 0; i < chunk_len; i++)
@@ -406,6 +436,12 @@ class ComConv {
 
         res = res and (BN_cmp(yMAC, yKEY) == 0);
 
+        // Sign all commitments individually:
+        bool signature_success = sign_commitments_with_ecdsa(com, chunk_len, "private_key.pem", pc);
+        if (signature_success) {
+            cout << "Created signatures: " << get_signature_info() << endl;
+        }
+
         BN_free(yMAC);
         EC_POINT_free(com_y);
         for (size_t i = 0; i < chunk_len; i++) {
@@ -454,6 +490,7 @@ class ComConv {
         for (size_t i = 0; i < aMACs.size(); i++) {
             aMACs[i] = BN_new();
         }
+        // Step 3(b) from paper
         convert_recv(aMACs, bMACs);
         //  separate input bits into chunks with batch_size bits each.
         size_t chunk_len = (bMACs.size() + batch_size - 1) / batch_size;
@@ -561,6 +598,12 @@ class ComConv {
         io->send_block(&yMAC_seed, 1);
         send_bn(io, yMAC);
 
+        // Verify signatures
+        bool verified = verify_commitment_signature(com, chunk_len, "public_key.pem", pc);
+        if (verified) {
+            cout << "Verified signatures: " << get_signature_info() << endl;
+        }
+
         for (size_t i = 0; i < chunk_len; i++) {
             BN_free(batch_aMACs[i]);
             BN_free(chi[i]);
@@ -579,6 +622,289 @@ class ComConv {
         }
 
         return res;
+    }
+
+    /**
+     * Signs each commitment individually using a predefined ECDSA key
+     * and sends the signatures to the other party.
+     * 
+     * @param com Commitment points to sign
+     * @param chunk_len Length of the commitment vector
+     * @param key_path Path to the PEM file containing private key
+     * @param pc Pedersen commitment context (for EC_GROUP access)
+     * @return true if signing succeeds, false otherwise
+     */
+    bool sign_commitments_with_ecdsa(
+        const vector<EC_POINT*>& com, 
+        size_t chunk_len,
+        const string& key_path,
+        const PedersenComm& pc
+    ) {
+        // Clean up any previous signature data
+        for (auto sig_der : signatures_der) {
+            OPENSSL_free(sig_der);
+        }
+        signatures_der.clear();
+        signature_lengths.clear();
+        signatures_valid = false;
+
+        // 1. Load the private key
+        EC_KEY* ecdsa_key = nullptr;
+        FILE* key_file = fopen(key_path.c_str(), "r");
+        if (!key_file) {
+            fprintf(stderr, "Error: Could not open ECDSA key file at %s\n", key_path.c_str());
+            return false;
+        }
+
+        ecdsa_key = PEM_read_ECPrivateKey(key_file, nullptr, nullptr, nullptr);
+        fclose(key_file);
+
+        if (!ecdsa_key) {
+            fprintf(stderr, "Error: Invalid ECDSA key format\n");
+            return false;
+        }
+
+        // 2. Sign each commitment individually
+        for (size_t i = 0; i < chunk_len; i++) {
+            // Convert commitment point to binary format
+            unsigned char point_buffer[65];
+            if (EC_POINT_point2oct(pc.group, com[i], POINT_CONVERSION_UNCOMPRESSED, 
+                                   point_buffer, 65, ctx) != 65) {
+                fprintf(stderr, "Error: Failed to convert EC point to binary\n");
+                EC_KEY_free(ecdsa_key);
+                
+                // Clean up any signatures we've created so far
+                for (auto sig_der : signatures_der) {
+                    OPENSSL_free(sig_der);
+                }
+                signatures_der.clear();
+                signature_lengths.clear();
+                
+                return false;
+            }
+
+            // Hash the individual commitment
+            Hash commitment_hash;
+            commitment_hash.put(point_buffer, 65);
+            unsigned char digest[Hash::DIGEST_SIZE];
+            commitment_hash.digest(digest);
+
+            // Sign the digest
+            ECDSA_SIG* signature = ECDSA_do_sign(digest, Hash::DIGEST_SIZE, ecdsa_key);
+            if (!signature) {
+                fprintf(stderr, "Error: ECDSA signing failed for commitment %zu\n", i);
+                EC_KEY_free(ecdsa_key);
+                
+                // Clean up any signatures we've created so far
+                for (auto sig_der : signatures_der) {
+                    OPENSSL_free(sig_der);
+                }
+                signatures_der.clear();
+                signature_lengths.clear();
+                
+                return false;
+            }
+
+            // Convert signature to DER format
+            unsigned char* sig_der = nullptr;
+            int sig_len = i2d_ECDSA_SIG(signature, &sig_der);
+            if (sig_len <= 0) {
+                fprintf(stderr, "Error: Failed to convert signature to DER format for commitment %zu\n", i);
+                ECDSA_SIG_free(signature);
+                EC_KEY_free(ecdsa_key);
+                
+                // Clean up any signatures we've created so far
+                for (auto sig_der : signatures_der) {
+                    OPENSSL_free(sig_der);
+                }
+                signatures_der.clear();
+                signature_lengths.clear();
+                
+                return false;
+            }
+
+            // Store the signature
+            signatures_der.push_back(sig_der);
+            signature_lengths.push_back(sig_len);
+
+            // Free the signature structure (we keep the DER format)
+            ECDSA_SIG_free(signature);
+        }
+
+        // 3. Send the number of signatures
+        int num_signatures = signatures_der.size();
+        io->send_data(&num_signatures, sizeof(int));
+
+        // 4. Send each signature
+        for (size_t i = 0; i < signatures_der.size(); i++) {
+            io->send_data(&signature_lengths[i], sizeof(int));
+            io->send_data(signatures_der[i], signature_lengths[i]);
+        }
+
+        // 5. Clean up resources
+        EC_KEY_free(ecdsa_key);
+        
+        signatures_valid = true;
+        return true;
+    }
+
+    /**
+     * Verifies individual signatures for each commitment using a public key from file
+     * 
+     * @param com Commitment points that were signed
+     * @param chunk_len Length of the commitment vector
+     * @param key_path Path to the PEM file containing public key
+     * @param pc Pedersen commitment context (for EC_GROUP access)
+     * @return true if all signatures are valid, false otherwise
+     */
+    bool verify_commitment_signature(
+        const vector<EC_POINT*>& com,
+        size_t chunk_len,
+        const string& key_path,
+        const PedersenComm& pc
+    ) {
+        // Clean up any previous signature data
+        for (auto sig_der : signatures_der) {
+            OPENSSL_free(sig_der);
+        }
+        signatures_der.clear();
+        signature_lengths.clear();
+        
+        if (public_key_bytes != nullptr) {
+            OPENSSL_free(public_key_bytes);
+            public_key_bytes = nullptr;
+            public_key_len = 0;
+        }
+        
+        signatures_valid = false;
+
+        // 1. Load the public key from file
+        EC_KEY* verify_key = nullptr;
+        FILE* key_file = fopen(key_path.c_str(), "r");
+        if (!key_file) {
+            fprintf(stderr, "Error: Could not open ECDSA public key file at %s\n", key_path.c_str());
+            return false;
+        }
+
+        verify_key = PEM_read_EC_PUBKEY(key_file, nullptr, nullptr, nullptr);
+        fclose(key_file);
+
+        if (!verify_key) {
+            fprintf(stderr, "Error: Invalid ECDSA public key format\n");
+            return false;
+        }
+
+        // Store the public key in the member variable for later use
+        public_key_len = i2o_ECPublicKey(verify_key, &public_key_bytes);
+        if (public_key_len <= 0) {
+            fprintf(stderr, "Error: Failed to export public key\n");
+            EC_KEY_free(verify_key);
+            return false;
+        }
+
+        // 2. Receive the number of signatures
+        int num_signatures;
+        io->recv_data(&num_signatures, sizeof(int));
+        
+        if (num_signatures != (int)chunk_len) {
+            fprintf(stderr, "Error: Number of signatures (%d) does not match number of commitments (%zu)\n", 
+                    num_signatures, chunk_len);
+            EC_KEY_free(verify_key);
+            return false;
+        }
+
+        // 3. Receive and verify each signature
+        for (size_t i = 0; i < chunk_len; i++) {
+            // Receive signature length and data
+            int sig_len;
+            io->recv_data(&sig_len, sizeof(int));
+            
+            unsigned char* sig_der = (unsigned char*)OPENSSL_malloc(sig_len);
+            if (!sig_der) {
+                fprintf(stderr, "Error: Memory allocation failed for signature %zu\n", i);
+                EC_KEY_free(verify_key);
+                
+                // Clean up any signatures we've received so far
+                for (auto stored_sig : signatures_der) {
+                    OPENSSL_free(stored_sig);
+                }
+                signatures_der.clear();
+                signature_lengths.clear();
+                
+                return false;
+            }
+            
+            io->recv_data(sig_der, sig_len);
+            
+            // Store the signature
+            signatures_der.push_back(sig_der);
+            signature_lengths.push_back(sig_len);
+            
+            // Convert the commitment to binary format
+            unsigned char point_buffer[65];
+            if (EC_POINT_point2oct(pc.group, com[i], POINT_CONVERSION_UNCOMPRESSED, 
+                                  point_buffer, 65, ctx) != 65) {
+                fprintf(stderr, "Error: Failed to convert EC point to binary for commitment %zu\n", i);
+                EC_KEY_free(verify_key);
+                return false;
+            }
+            
+            // Hash the commitment
+            Hash commitment_hash;
+            commitment_hash.put(point_buffer, 65);
+            unsigned char digest[Hash::DIGEST_SIZE];
+            commitment_hash.digest(digest);
+            
+            // Parse the signature
+            ECDSA_SIG* signature = nullptr;
+            const unsigned char* sig_ptr = sig_der;
+            signature = d2i_ECDSA_SIG(&signature, &sig_ptr, sig_len);
+            if (!signature) {
+                fprintf(stderr, "Error: Failed to parse signature for commitment %zu\n", i);
+                EC_KEY_free(verify_key);
+                return false;
+            }
+            
+            // Verify the signature
+            int verify_result = ECDSA_do_verify(digest, Hash::DIGEST_SIZE, signature, verify_key);
+            ECDSA_SIG_free(signature);
+            
+            if (verify_result != 1) {
+                fprintf(stderr, "Error: Signature verification failed for commitment %zu\n", i);
+                EC_KEY_free(verify_key);
+                return false;
+            }
+        }
+
+        // 4. Clean up resources
+        EC_KEY_free(verify_key);
+        
+        signatures_valid = true;
+        return true;
+    }
+
+    /**
+     * Checks if valid signatures exist for all commitments
+     * @return true if valid signatures exist, false otherwise
+     */
+    bool has_valid_signature() const {
+        return signatures_valid && !signatures_der.empty();
+    }
+    
+    /**
+     * Gets signature information (for debugging or display)
+     * @return string containing information about the signatures
+     */
+    string get_signature_info() const {
+        if (!has_valid_signature()) {
+            return "No valid signatures";
+        }
+        
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "Valid signatures: %zu signatures, total %d bytes", 
+                 signatures_der.size(), 
+                 std::accumulate(signature_lengths.begin(), signature_lengths.end(), 0));
+        return string(buffer);
     }
 };
 
