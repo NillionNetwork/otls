@@ -15,6 +15,15 @@ macro (add_test_case_with_run _name)
 
 endmacro()
 
+# New macro for gRPC-enabled tests
+macro (add_grpc_test_case _name)
+    if(ENABLE_GRPC)
+        add_executable(test_${_name}_grpc "${_name}.cpp" ${PROTO_SOURCES})
+        target_link_libraries(test_${_name}_grpc otls ${EMP-ZK_LIBRARIES} ${GRPC_LIBRARIES} pthread)
+        add_test(NAME ${_name}_grpc COMMAND "./run" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test_${_name}_grpc" WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/")
+    endif()
+endmacro()
+
 # Test cases
 add_test_case_with_run(bit)
 # add_test_case_with_run(int)

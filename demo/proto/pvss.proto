@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package pvss;
+
+// Service definition for PVSS operations
+service PVSSService {
+  // Send shares and commitments from C++ to Rust
+  rpc GeneratePVSS (PVSSRequest) returns (PVSSResponse);
+}
+
+// Request message containing shares, commitments, and signatures
+message PVSSRequest {
+  // Serialized cryptographic shares
+  bytes shares = 1;
+  
+  // Serialized committed shares
+  bytes committed_shares = 2;
+  
+  // Serialized signatures
+  bytes signatures = 3;
+}
+
+// Response message containing the PVSS result
+message PVSSResponse {
+  // Status of the operation
+  bool success = 1;
+  
+  // Error message if any
+  string error_message = 2;
+  
+  // Generated PVSS data
+  bytes pvss_data = 3;
+} 

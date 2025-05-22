@@ -2,6 +2,9 @@ cmake_minimum_required (VERSION 3.0)
 project (otls)
 set(NAME "otls")
 
+# Add gRPC support option
+option(ENABLE_GRPC "Enable gRPC support" OFF)
+
 IF(ENABLE_WASM)
   set(CMAKE_FOLDER ${CMAKE_INSTALL_PREFIX})
   include(${CMAKE_FOLDER}/cmake/emp-base.cmake)
@@ -30,6 +33,34 @@ ELSE()
   find_package(emp-zk REQUIRED)
   include_directories(${EMP-ZK_INCLUDE_DIRS})
 ENDIF()
+
+# Add gRPC support if enabled
+if(ENABLE_GRPC)
+  find_package(Protobuf REQUIRED)
+  find_package(gRPC CONFIG QUIET)
+  
+  if(NOT gRPC_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GRPC REQUIRED grpc++)
+    pkg_check_modules(PROTOBUF REQUIRED protobuf)
+    set(GRPC_LIBRARIES ${GRPC_LIBRARIES} ${PROTOBUF_LIBRARIES})
+  else()
+    set(GRPC_LIBRARIES gRPC::grpc++ gRPC::grpc)
+  endif()
+  
+  # Add proto build directory to include path
+  set(PROTO_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/proto")
+  include_directories(${PROTO_BUILD_DIR})
+  
+  # Define proto source files
+  set(PROTO_SOURCES
+    ${PROTO_BUILD_DIR}/pvss.pb.cc
+    ${PROTO_BUILD_DIR}/pvss.grpc.pb.cc
+  )
+  
+  # Add preprocessor definition to enable gRPC features in code
+  add_definitions(-DENABLE_GRPC)
+endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(sources

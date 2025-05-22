@@ -16,6 +16,7 @@ mkdir -p ${builddir} ${installdir}
 
 enable_threading=ON
 enable_test=ON
+enable_grpc=ON
 
 #######################################################################
 #######################################################################
@@ -35,6 +36,7 @@ cd ${builddir}/${repo}
 cmake ${repo_dir} \
   -DTHREADING=${enable_threading} \
   -DENABLE_OTLS_TEST=${enable_test} \
+  -DENABLE_GRPC=${enable_grpc} \
   -DCMAKE_INSTALL_PREFIX=${installdir} \
   -DCMAKE_PREFIX_PATH=${primus_emp_installdir} \
   -DCMAKE_BUILD_TYPE=${build_type}

@@ -1,0 +1,13 @@
+[package]
+name = "pvss-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tonic = "0.10"
+prost = "0.12"
+tokio = { version = "1.34", features = ["rt-multi-thread", "macros"] }
+bytes = "1.5"
+
+[build-dependencies]
+tonic-build = "0.10" 
