@@ -7,6 +7,32 @@ This guide explains how to build and test the OTLS repository using Docker, with
 - Docker
 - Docker Compose
 
+## Curve Selection
+
+OTLS supports two different elliptic curves for cryptographic operations in the `com_conv` example:
+- **BLS12-446** (default): A pairing-friendly curve suitable for advanced cryptographic protocols
+- **Ed25519**: A widely-used curve optimized for performance and security
+
+You can select the curve during the build process in several ways:
+
+1. **Using environment variable**:
+```bash
+export RELIC_CURVE=Ed25519
+docker compose build
+```
+
+2. **Using command line argument**:
+```bash
+docker compose build --build-arg RELIC_CURVE=Ed25519
+```
+
+3. **Using default (BLS12-446)**:
+```bash
+docker compose build
+```
+
+The build output will indicate which curve is being used. If an unknown curve is specified, the build will fail with a clear error message.
+
 ## Getting Started
 
 1. Build the Docker image:
@@ -111,3 +137,4 @@ You can modify the Dockerfile or use the volume mount to make changes to the cod
 # Recompile after making changes
 bash ./compile.sh /opt/primus/primus-emp
 ``` 
+

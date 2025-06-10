@@ -5,6 +5,13 @@
 #include "emp-tool/emp-tool.h"
 using namespace emp;
 
+extern "C" {
+#include <relic/relic.h>
+#include <relic/relic_core.h>
+#include <relic/relic_types.h>
+}
+
+
 /* Hash the 128-bit block into a large field with a ccrh hasher */
 inline void H(BIGNUM* out, block b, BIGNUM* q, BN_CTX* ctx, CCRH& ccrh) {
     block arr[2];
@@ -37,6 +44,30 @@ inline void recv_bn(IO* io, BIGNUM* bn, Hash* hash = nullptr) {
     if (hash != nullptr)
         hash->put(arr, length);
     BN_bin2bn(arr, length, bn);
+}
+
+/* Send a RELIC big integer with IO */
+template <typename IO>
+inline void send_bn(IO* io, const bn_t bn, Hash* hash = nullptr) {
+    unsigned char arr[1000];
+    int length = bn_size_bin(bn);
+    bn_write_bin(arr, length, bn);
+    io->send_data(&length, sizeof(uint32_t));
+    io->send_data(arr, length);
+    if (hash != nullptr)
+        hash->put(arr, length);
+}
+
+/* Receive a RELIC big integer with IO */
+template <typename IO>
+inline void recv_bn(IO* io, bn_t bn, Hash* hash = nullptr) {
+    unsigned char arr[1000];
+    uint32_t length = -1;
+    io->recv_data(&length, sizeof(uint32_t));
+    io->recv_data(arr, length);
+    if (hash != nullptr)
+        hash->put(arr, length);
+    bn_read_bin(bn, arr, length);
 }
 
 /* Garbling an AND gate with half gates*/
@@ -128,6 +159,80 @@ inline void garble_gate_eval_halfgates(
     W = W ^ (select_mask[sb] & A);
 
     *out = W;
+}
+
+/**
+ * @brief Converts a RELIC bn_t number to an OpenSSL BIGNUM
+ * 
+ * This function takes a RELIC big number (bn_t) and converts it to an OpenSSL BIGNUM.
+ * The conversion is done by:
+ * 1. Getting the binary size of the RELIC number
+ * 2. Allocating a buffer to hold the binary representation
+ * 3. Writing the RELIC number to the buffer in binary format
+ * 4. Converting the binary data to an OpenSSL BIGNUM
+ * 
+ * @param relic_bn The RELIC bn_t number to convert
+ * @return BIGNUM* The converted OpenSSL BIGNUM, or NULL if conversion fails
+ * @note The caller is responsible for freeing the returned BIGNUM using BN_free()
+ */
+inline BIGNUM* relic_bn_to_openssl_bignum(const bn_t relic_bn) {
+    int size = bn_size_bin(relic_bn);
+    unsigned char *buffer = (unsigned char *)malloc(size);
+    if (buffer == NULL) {
+        return NULL;
+    }
+    bn_write_bin(buffer, size, relic_bn);
+    BIGNUM *openssl_bn = BN_bin2bn(buffer, size, NULL);
+    free(buffer);
+    return openssl_bn;
+}
+
+/**
+ * @brief Converts a vector of RELIC bn_t numbers to a vector of OpenSSL BIGNUM pointers
+ */
+inline std::vector<BIGNUM*> relic_bn_vec_to_openssl_bignum_vec(const bn_t* relic_bns, size_t len) {
+    std::vector<BIGNUM*> openssl_bns;
+    openssl_bns.reserve(len);
+    for (size_t i = 0; i < len; i++) {
+        openssl_bns.push_back(relic_bn_to_openssl_bignum(relic_bns[i]));
+    }
+    return openssl_bns;
+}
+
+/**
+ * @brief Converts an OpenSSL BIGNUM to a RELIC bn_t number
+ * 
+ * This function takes an OpenSSL BIGNUM and converts it to a RELIC bn_t number.
+ * The conversion is done by:
+ * 1. Getting the binary size of the OpenSSL BIGNUM
+ * 2. Allocating a buffer to hold the binary representation
+ * 3. Converting the OpenSSL BIGNUM to binary format
+ * 4. Reading the binary data into a RELIC bn_t number
+ * 
+ * @param relic_bn The RELIC bn_t number to store the result
+ * @param openssl_bn The OpenSSL BIGNUM to convert
+ * @return int RLC_OK on success, RLC_ERR on failure
+ * @note The caller is responsible for initializing and freeing the RELIC bn_t number
+ */
+inline int openssl_bignum_to_relic_bn(bn_t relic_bn, const BIGNUM *openssl_bn) {
+    int size = BN_num_bytes(openssl_bn);
+    unsigned char *buffer = (unsigned char *)malloc(size);
+    if (buffer == NULL) {
+        return RLC_ERR;
+    }
+    BN_bn2bin(openssl_bn, buffer);
+    bn_read_bin(relic_bn, buffer, size);
+    free(buffer);
+    return RLC_OK;
+}
+
+/**
+ * @brief Converts a vector of OpenSSL BIGNUM pointers to RELIC bn_t numbers
+ */
+inline void openssl_bignum_vec_to_relic_bn_vec(bn_t* relic_bns, const std::vector<BIGNUM*>& openssl_bns) {
+    for (size_t i = 0; i < openssl_bns.size(); i++) {
+        openssl_bignum_to_relic_bn(relic_bns[i], openssl_bns[i]);
+    }
 }
 
 #endif // PRIMUS_BN_UTILS_H__
