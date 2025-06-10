@@ -1,7 +1,7 @@
 #Testing macro
 macro (add_test_executable_with_lib _name libs)
     add_executable(test_${_name} "${_name}.cpp")
-    target_link_libraries(test_${_name} otls ${EMP-ZK_LIBRARIES})
+    target_link_libraries(test_${_name} otls ${EMP-ZK_LIBRARIES} ${RELIC_LIBRARY})
 endmacro()
 
 macro (add_test_case _name)
@@ -46,3 +46,4 @@ add_test_case_with_run(handshake_on_off)
 add_test_case_with_run(prove_aes)
 add_test_case_with_run(prove_prf)
 add_test_case_with_run(prove_proxy_tls)
+add_test_case_with_run(bn_conversion)
