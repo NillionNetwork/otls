@@ -528,8 +528,6 @@ class ComConv {
         //     chi_hash.put(buf, 65);
         //     EC_POINT_oct2point(pc.group, com[i], buf, 65, ctx);
         // }
-
-
         int compressed_size = ec_size_bin(com[0], 1);  // 1 for compressed format
         unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
         for (size_t i = 0; i < chunk_len; i++) {
@@ -668,15 +666,15 @@ class ComConv {
             BN_free(aKEYs[i]);
         }
 
-        // Clean up when done
-        for (size_t i = 0; i < chunk_len + 1; i++) {
-            ec_free(relic_comms[i]);
-        }
+        // // Clean up when done
+        // for (size_t i = 0; i < chunk_len + 1; i++) {
+        //     ec_free(relic_comms[i]);
+        // }
 
         return res;
     }
 
-    bool compute_com_recv(ec_t* com,
+    std::pair<bool, vector<BIGNUM*>> compute_com_recv(ec_t* com,
                           vector<BIGNUM*>& rnds,
                           vector<block> bMACs,
                           RelicPedersenComm& pc,
@@ -741,6 +739,7 @@ class ComConv {
             pc.commit(com[i], relic_rnd, relic_msg);
             rnds[i] = relic_bn_to_openssl_bignum(relic_rnd);
 
+            // Need to pass this instead of deleting it
             bn_free(relic_rnd);
             bn_free(relic_msg);
         }
@@ -908,7 +907,7 @@ class ComConv {
         for (size_t i = 0; i < chunk_len; i++) {
             BN_free(batch_aMACs[i]);
             BN_free(chi[i]);
-            BN_free(msg[i]);
+            // BN_free(msg[i]); // Don't free msg, we're returning it
         }
 
         bn_free(relic_rnd_y);
@@ -923,7 +922,7 @@ class ComConv {
             BN_free(aMACs[i]);
         }
 
-        return res;
+        return std::make_pair(res, msg);
     }
 
     /**
@@ -1157,6 +1156,14 @@ class ComConv {
                 return false;
             }
         }
+
+        // Write all signatures to file (overwrite mode to match commitments.bin behavior)
+        std::ofstream sig_file("shared_bin/signatures.bin", std::ios::binary);
+        for (size_t i = 0; i < signatures_der.size(); i++) {
+            sig_file.write(reinterpret_cast<const char*>(&signature_lengths[i]), sizeof(int));
+            sig_file.write(reinterpret_cast<const char*>(signatures_der[i]), signature_lengths[i]);
+        }
+        sig_file.close();
 
         // 4. Clean up resources
         EC_KEY_free(verify_key);

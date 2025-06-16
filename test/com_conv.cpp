@@ -4,6 +4,7 @@
 #include "emp-zk/emp-zk.h"
 #include "emp-ot/emp-ot.h"
 #include <iostream>
+#include <fstream>
 #include "backend/switch.h"
 
 #include <chrono>
@@ -32,7 +33,7 @@ void com_conv_test(
     }
     
     // Define the order of the curve
-    // EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    // EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v0);
     // BIGNUM* q = BN_new();
     // BN_CTX* ctx = BN_CTX_new();
     // BN_copy(q, EC_GROUP_get0_order(group));
@@ -45,35 +46,52 @@ void com_conv_test(
     // BIGNUM* sa = BN_new();
     // BIGNUM* sb = BN_new();
     // BIGNUM* s = BN_new();
-    bn_t sa;
-    bn_null(sa);
-    bn_new(sa);
-    bn_t sb;
-    bn_null(sb);
-    bn_new(sb);
-    bn_t s;
-    bn_null(s);
-    bn_new(s);
+    bn_t sa; bn_null(sa); bn_new(sa);
+    bn_t sb; bn_null(sb); bn_new(sb);
+    ec_t ha; ec_null(ha); ec_new(ha);
+    ec_t hb; ec_null(hb); ec_new(hb);
     if (party == ALICE) {
         // BN_rand_range(sa, EC_GROUP_get0_order(group));
         bn_rand_mod(sa, q);
-        send_bn(io, sa);
-        recv_bn(io, sb);
+        ec_mul_gen(ha, sa);
+        int compressed_size = ec_size_bin(ha, 1);  // 1 for compressed format
+        unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
+        
+        // Sending ha
+        ec_write_bin(buf, compressed_size, ha, 1);
+        io->send_data(buf, compressed_size);
+        
+        // Receiving hb
+        io->recv_data(buf, compressed_size);
+        ec_read_bin(hb, buf, compressed_size);
+        // send_bn(io, sa);
+        // recv_bn(io, sb);
     } else {
         // BN_rand_range(sb, EC_GROUP_get0_order(group));
         bn_rand_mod(sb, q);
-        recv_bn(io, sa);
-        send_bn(io, sb);
+        ec_mul_gen(hb, sb);
+        int compressed_size = ec_size_bin(hb, 1);  // 1 for compressed format
+        unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
+
+        // Receiving ha
+        io->recv_data(buf, compressed_size);
+        ec_read_bin(ha, buf, compressed_size);
+        
+        // Sending hb
+        ec_write_bin(buf, compressed_size, hb, 1);
+        io->send_data(buf, compressed_size);
+
+
+        // recv_bn(io, sa);
+        // send_bn(io, sb);
     }
-    // BN_mod_add(s, sa, sb, EC_GROUP_get0_order(group), ctx);
-    bn_add(s, sa, sb);
-    bn_mod(s, s, q);
-    // EC_POINT* h = EC_POINT_new(group);
-    // EC_POINT_mul(group, h, s, NULL, NULL, ctx);
-    ec_t h;
-    ec_null(h);
-    ec_new(h);
-    ec_mul_gen(h, s);
+    // // BN_mod_add(s, sa, sb, EC_GROUP_get0_order(group), ctx);
+    // bn_add(s, sa, sb);
+    // bn_mod(s, s, q);
+    // // EC_POINT* h = EC_POINT_new(group);
+    // // EC_POINT_mul(group, h, s, NULL, NULL, ctx);
+    ec_t h; ec_null(h); ec_new(h);
+    ec_add(h, ha, hb);
 
     vector<block> raw(array_len);
     for (size_t i = 0; i < raw.size(); i++)
@@ -116,6 +134,13 @@ void com_conv_test(
     ComConv<IO> conv(io, cot, openssl_q, Delta);
     RelicPedersenComm pc(h);
 
+    // // Initialize
+    // ec_t relic_comms[chunk_len];
+    // for (size_t i = 0; i < chunk_len; i++) {
+    //     ec_null(relic_comms[i]);
+    //     ec_new(relic_comms[i]);
+    // }
+
     if (party == BOB) {
         auto start = emp::clock_start();
         bool res = conv.compute_com_send(coms, raw, pc, batch_size);
@@ -128,7 +153,10 @@ void com_conv_test(
         cout << "BOB comm: " << io->counter - comm << " bytes" << endl;
     } else {
         auto start = emp::clock_start();
-        bool res = conv.compute_com_recv(coms, rnds, raw, pc, batch_size);
+        auto result = conv.compute_com_recv(coms, rnds, raw, pc, batch_size);
+        bool res = result.first;
+        vector<BIGNUM*> msg = result.second;
+        
         if (res) {
             cout << "ALICE check passed" << endl;
         } else {
@@ -136,20 +164,100 @@ void com_conv_test(
         }
         cout << "ALICE time: " << emp::time_from(start) << " us" << endl;
         cout << "ALICE comms: " << io->counter - comm << " bytes" << endl;
+    
+        // Write the commitments to file
+        std::ofstream binary_file("shared_bin/commitments.bin", std::ios::binary);
+        int compressed_size = ec_size_bin(coms[0], 1);
+        unsigned char* buf = new unsigned char[compressed_size];  
+        for (size_t i = 0; i < chunk_len; i++) {
+            ec_write_bin(buf, compressed_size, coms[i], 1);
+            binary_file.write(reinterpret_cast<const char*>(buf), compressed_size);
+        }
+        delete(buf);
+        binary_file.close();
+
+        // Write messages to file
+        std::ofstream msg_file("shared_bin/messages.bin", std::ios::binary);
+        for (size_t i = 0; i < chunk_len; i++) {
+            // Convert BIGNUM to binary
+            int msg_size = BN_num_bytes(msg[i]);
+            unsigned char* msg_buf = new unsigned char[msg_size];
+            BN_bn2bin(msg[i], msg_buf);
+            
+            // Write size first, then the message data
+            msg_file.write(reinterpret_cast<const char*>(&msg_size), sizeof(int));
+            msg_file.write(reinterpret_cast<const char*>(msg_buf), msg_size);
+            
+            delete[] msg_buf;
+        }
+        msg_file.close();
+        cout << "ALICE: Written " << chunk_len << " message values to messages.bin" << endl;
+
+        // // Create and save BN number 7
+        // BIGNUM* test_bn = BN_new();
+        // BN_set_word(test_bn, 7);
+        
+        // std::ofstream bn_file("shared_bin/test_bn.bin", std::ios::binary);
+        // int bn_size = BN_num_bytes(test_bn);
+        // unsigned char* bn_buf = new unsigned char[bn_size];
+        // BN_bn2bin(test_bn, bn_buf);
+        
+        // // Write size first, then the BN data
+        // bn_file.write(reinterpret_cast<const char*>(&bn_size), sizeof(int));
+        // bn_file.write(reinterpret_cast<const char*>(bn_buf), bn_size);
+        
+        // delete[] bn_buf;
+        // BN_free(test_bn);
+        // bn_file.close();
+        // cout << "ALICE: Written test BN value 7 to test_bn.bin" << endl;
+
+
+        // Write randomness rnds to file
+        std::ofstream rnd_file("shared_bin/randomness.bin", std::ios::binary);
+        for (size_t i = 0; i < chunk_len; i++) {
+            // Convert BIGNUM to binary
+            int rnd_size = BN_num_bytes(rnds[i]);
+            unsigned char* rnd_buf = new unsigned char[rnd_size];
+            BN_bn2bin(rnds[i], rnd_buf);
+            
+            // Write size first, then the randomness data
+            rnd_file.write(reinterpret_cast<const char*>(&rnd_size), sizeof(int));
+            rnd_file.write(reinterpret_cast<const char*>(rnd_buf), rnd_size);
+            
+            delete[] rnd_buf;
+        }
+        rnd_file.close();
+        cout << "ALICE: Written " << chunk_len << " randomness values to randomness.bin" << endl;
+
+        // Write h to file
+        // std::ofstream h_file("../pvss/src/aux_data/h_value.bin", std::ios::binary);
+        std::ofstream h_file("shared_bin/h_value.bin", std::ios::binary);
+        int h_compressed_size = ec_size_bin(h, 1);
+        unsigned char* h_buf = new unsigned char[h_compressed_size];
+        ec_write_bin(h_buf, h_compressed_size, h, 1);
+        h_file.write(reinterpret_cast<const char*>(h_buf), h_compressed_size);
+        delete(h_buf);
+        h_file.close();
+        cout << "ALICE: Written h value to h_value.bin (" << h_compressed_size << " bytes)" << endl;
+        
+        // Clean up the msg vector
+        for (size_t i = 0; i < chunk_len; i++) {
+            BN_free(msg[i]);
+        }
     }
 
-    // // for (size_t i = 0; i < chunk_len; i++) {
-    // //     EC_POINT_free(coms[i]);
-    // //     BN_free(rnds[i]);
-    // // }
+    // for (size_t i = 0; i < chunk_len; i++) {
+    //     EC_POINT_free(coms[i]);
+    //     BN_free(rnds[i]);
+    // }
 
-    // // // Cleanup
-    // // for (size_t i = 0; i < chunk_len; ++i) {
-    // //     ep_free(coms[i]);
-    // //     bn_free(rnds[i]);
-    // // }
-    // // delete[] coms;
-    // // delete[] rnds;
+    // Cleanup
+    for (size_t i = 0; i < chunk_len; ++i) {
+        ep_free(coms[i]);
+        bn_free(rnds[i]);
+    }
+    // delete[] coms;
+    // delete[] rnds;
 }
 
 const int threads = 4;
@@ -194,5 +302,6 @@ int main(int argc, char** argv) {
         delete ios[i];
         delete io[i];
     }
+
     return 0;
 }
