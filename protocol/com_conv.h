@@ -530,7 +530,7 @@ class ComConv {
         // }
 
 
-        int compressed_size = ec_size_bin(com[0], 1);  // 1 for compressed format
+        int compressed_size = ec_size_bin(com[0], 1);  // 0 for uncompressed format
         unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
         for (size_t i = 0; i < chunk_len; i++) {
             io->recv_data(buf, compressed_size);
@@ -668,15 +668,15 @@ class ComConv {
             BN_free(aKEYs[i]);
         }
 
-        // Clean up when done
-        for (size_t i = 0; i < chunk_len + 1; i++) {
-            ec_free(relic_comms[i]);
-        }
+        // // Clean up when done
+        // for (size_t i = 0; i < chunk_len + 1; i++) {
+        //     ec_free(relic_comms[i]);
+        // }
 
         return res;
     }
 
-    bool compute_com_recv(ec_t* com,
+    std::pair<bool, vector<BIGNUM*>> compute_com_recv(ec_t* com,
                           vector<BIGNUM*>& rnds,
                           vector<block> bMACs,
                           RelicPedersenComm& pc,
@@ -741,6 +741,7 @@ class ComConv {
             pc.commit(com[i], relic_rnd, relic_msg);
             rnds[i] = relic_bn_to_openssl_bignum(relic_rnd);
 
+            // Need to pass this instead of deleting it
             bn_free(relic_rnd);
             bn_free(relic_msg);
         }
@@ -776,11 +777,11 @@ class ComConv {
         //     io->send_data(buf, 65);
         //     chi_hash.put(buf, 65);
         // }
-        int compressed_size = ec_size_bin(relic_comm_r, 1);  // 1 for compressed format
+        int compressed_size = ec_size_bin(relic_comm_r, 1);  // 0 for uncompressed format
         // unsigned char* buf = new unsigned char[compressed_size];  
         unsigned char* buf = (unsigned char*)malloc(compressed_size); 
         for (size_t i = 0; i < chunk_len; i++) {
-            ec_write_bin(buf, compressed_size, com[i], 1);  // 1 for compressed format
+            ec_write_bin(buf, compressed_size, com[i], 1);  // 0 for uncompressed format
             io->send_data(buf, compressed_size);
             chi_hash.put(buf, compressed_size);
         }
@@ -894,7 +895,7 @@ class ComConv {
         for (size_t i = 0; i < chunk_len; i++) {
             BN_free(batch_aMACs[i]);
             BN_free(chi[i]);
-            BN_free(msg[i]);
+            // BN_free(msg[i]); // Don't free msg, we're returning it
         }
 
         bn_free(relic_rnd_y);
@@ -909,7 +910,7 @@ class ComConv {
             BN_free(aMACs[i]);
         }
 
-        return res;
+        return std::make_pair(res, msg);
     }
 
     /**
@@ -1143,6 +1144,14 @@ class ComConv {
                 return false;
             }
         }
+
+        // Write all signatures to file (overwrite mode to match commitments.bin behavior)
+        std::ofstream sig_file("signatures.bin", std::ios::binary);
+        for (size_t i = 0; i < signatures_der.size(); i++) {
+            sig_file.write(reinterpret_cast<const char*>(&signature_lengths[i]), sizeof(int));
+            sig_file.write(reinterpret_cast<const char*>(signatures_der[i]), signature_lengths[i]);
+        }
+        sig_file.close();
 
         // 4. Clean up resources
         EC_KEY_free(verify_key);

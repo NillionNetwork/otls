@@ -40,6 +40,8 @@ install_manifest.txt
 *.out
 *.app
 
+*.bin
+
 # Emacs
 *~
 
