@@ -25,6 +25,7 @@ docker compose build
 ```bash
 docker compose build --build-arg RELIC_CURVE=Ed25519
 ```
+Optionally pass `BUILD_ON_MAC=yes` after `--build-arg` to build on MAC.
 
 3. **Using default (BLS12-446)**:
 ```bash
