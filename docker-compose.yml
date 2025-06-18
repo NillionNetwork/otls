@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        RELIC_CURVE: ${RELIC_CURVE:-BLS12-446}  # Default to BLS12-446 if not set
+        RELIC_CURVE: ${RELIC_CURVE:-ED25519}  # Default to ED25519 if not set
     volumes:
       - ./:/opt/primus/otls
     ports:

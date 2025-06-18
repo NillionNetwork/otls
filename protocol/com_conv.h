@@ -528,9 +528,7 @@ class ComConv {
         //     chi_hash.put(buf, 65);
         //     EC_POINT_oct2point(pc.group, com[i], buf, 65, ctx);
         // }
-
-
-        int compressed_size = ec_size_bin(com[0], 1);  // 0 for uncompressed format
+        int compressed_size = ec_size_bin(com[0], 1);  // 1 for compressed format
         unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
         for (size_t i = 0; i < chunk_len; i++) {
             io->recv_data(buf, compressed_size);
@@ -777,11 +775,11 @@ class ComConv {
         //     io->send_data(buf, 65);
         //     chi_hash.put(buf, 65);
         // }
-        int compressed_size = ec_size_bin(relic_comm_r, 1);  // 0 for uncompressed format
+        int compressed_size = ec_size_bin(relic_comm_r, 1);  // 1 for compressed format
         // unsigned char* buf = new unsigned char[compressed_size];  
         unsigned char* buf = (unsigned char*)malloc(compressed_size); 
         for (size_t i = 0; i < chunk_len; i++) {
-            ec_write_bin(buf, compressed_size, com[i], 1);  // 0 for uncompressed format
+            ec_write_bin(buf, compressed_size, com[i], 1);  // 1 for compressed format
             io->send_data(buf, compressed_size);
             chi_hash.put(buf, compressed_size);
         }
@@ -1146,7 +1144,7 @@ class ComConv {
         }
 
         // Write all signatures to file (overwrite mode to match commitments.bin behavior)
-        std::ofstream sig_file("signatures.bin", std::ios::binary);
+        std::ofstream sig_file("shared_bin/signatures.bin", std::ios::binary);
         for (size_t i = 0; i < signatures_der.size(); i++) {
             sig_file.write(reinterpret_cast<const char*>(&signature_lengths[i]), sizeof(int));
             sig_file.write(reinterpret_cast<const char*>(signatures_der[i]), signature_lengths[i]);

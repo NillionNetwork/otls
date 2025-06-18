@@ -46,26 +46,15 @@ void com_conv_test(
     // BIGNUM* sa = BN_new();
     // BIGNUM* sb = BN_new();
     // BIGNUM* s = BN_new();
-    bn_t sa;
-    bn_null(sa);
-    bn_new(sa);
-    bn_t sb;
-    bn_null(sb);
-    bn_new(sb);
-    ec_t ha;
-    ec_null(ha);
-    ec_new(ha);
-    ec_t hb;
-    ec_null(hb);
-    ec_new(hb);
-    bn_t s;
-    bn_null(s);
-    bn_new(s);
+    bn_t sa; bn_null(sa); bn_new(sa);
+    bn_t sb; bn_null(sb); bn_new(sb);
+    ec_t ha; ec_null(ha); ec_new(ha);
+    ec_t hb; ec_null(hb); ec_new(hb);
     if (party == ALICE) {
         // BN_rand_range(sa, EC_GROUP_get0_order(group));
         bn_rand_mod(sa, q);
         ec_mul_gen(ha, sa);
-        int compressed_size = ec_size_bin(ha, 1);  // 0 for uncompressed format
+        int compressed_size = ec_size_bin(ha, 1);  // 1 for compressed format
         unsigned char* buf = (unsigned char*)malloc(compressed_size);  // RELIC points are 65 bytes uncompressed
         
         // Sending ha
@@ -101,15 +90,8 @@ void com_conv_test(
     // bn_mod(s, s, q);
     // // EC_POINT* h = EC_POINT_new(group);
     // // EC_POINT_mul(group, h, s, NULL, NULL, ctx);
-    ec_t h;
-    ec_null(h);
-    ec_new(h);
-    // ec_mul_gen(h, s);
+    ec_t h; ec_null(h); ec_new(h);
     ec_add(h, ha, hb);
-    ec_print(h);
-
-
-
 
     vector<block> raw(array_len);
     for (size_t i = 0; i < raw.size(); i++)
@@ -184,7 +166,7 @@ void com_conv_test(
         cout << "ALICE comms: " << io->counter - comm << " bytes" << endl;
     
         // Write the commitments to file
-        std::ofstream binary_file("commitments.bin", std::ios::binary);
+        std::ofstream binary_file("shared_bin/commitments.bin", std::ios::binary);
         int compressed_size = ec_size_bin(coms[0], 1);
         unsigned char* buf = new unsigned char[compressed_size];  
         for (size_t i = 0; i < chunk_len; i++) {
@@ -195,7 +177,7 @@ void com_conv_test(
         binary_file.close();
 
         // Write messages to file
-        std::ofstream msg_file("messages.bin", std::ios::binary);
+        std::ofstream msg_file("shared_bin/messages.bin", std::ios::binary);
         for (size_t i = 0; i < chunk_len; i++) {
             // Convert BIGNUM to binary
             int msg_size = BN_num_bytes(msg[i]);
@@ -211,8 +193,27 @@ void com_conv_test(
         msg_file.close();
         cout << "ALICE: Written " << chunk_len << " message values to messages.bin" << endl;
 
+        // // Create and save BN number 7
+        // BIGNUM* test_bn = BN_new();
+        // BN_set_word(test_bn, 7);
+        
+        // std::ofstream bn_file("shared_bin/test_bn.bin", std::ios::binary);
+        // int bn_size = BN_num_bytes(test_bn);
+        // unsigned char* bn_buf = new unsigned char[bn_size];
+        // BN_bn2bin(test_bn, bn_buf);
+        
+        // // Write size first, then the BN data
+        // bn_file.write(reinterpret_cast<const char*>(&bn_size), sizeof(int));
+        // bn_file.write(reinterpret_cast<const char*>(bn_buf), bn_size);
+        
+        // delete[] bn_buf;
+        // BN_free(test_bn);
+        // bn_file.close();
+        // cout << "ALICE: Written test BN value 7 to test_bn.bin" << endl;
+
+
         // Write randomness rnds to file
-        std::ofstream rnd_file("randomness.bin", std::ios::binary);
+        std::ofstream rnd_file("shared_bin/randomness.bin", std::ios::binary);
         for (size_t i = 0; i < chunk_len; i++) {
             // Convert BIGNUM to binary
             int rnd_size = BN_num_bytes(rnds[i]);
@@ -229,7 +230,8 @@ void com_conv_test(
         cout << "ALICE: Written " << chunk_len << " randomness values to randomness.bin" << endl;
 
         // Write h to file
-        std::ofstream h_file("../pvss/src/aux_data/h_value.bin", std::ios::binary);
+        // std::ofstream h_file("../pvss/src/aux_data/h_value.bin", std::ios::binary);
+        std::ofstream h_file("shared_bin/h_value.bin", std::ios::binary);
         int h_compressed_size = ec_size_bin(h, 1);
         unsigned char* h_buf = new unsigned char[h_compressed_size];
         ec_write_bin(h_buf, h_compressed_size, h, 1);
