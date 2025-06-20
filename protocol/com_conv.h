@@ -128,17 +128,17 @@ class ComConv {
         BN_free(q);
         delete ole;
         
-        // Clean up signature data
-        for (auto sig_der : signatures_der) {
-            OPENSSL_free(sig_der);
-        }
-        signatures_der.clear();
-        signature_lengths.clear();
+        // // Clean up signature data
+        // for (auto sig_der : signatures_der) {
+        //     OPENSSL_free(sig_der);
+        // }
+        // signatures_der.clear();
+        // signature_lengths.clear();
         
-        if (public_key_bytes != nullptr) {
-            OPENSSL_free(public_key_bytes);
-            public_key_bytes = nullptr;
-        }
+        // if (public_key_bytes != nullptr) {
+        //     OPENSSL_free(public_key_bytes);
+        //     public_key_bytes = nullptr;
+        // }
     }
 
     void compute_hash(unsigned char res[Hash::DIGEST_SIZE],
@@ -436,11 +436,11 @@ class ComConv {
 
         res = res and (BN_cmp(yMAC, yKEY) == 0);
 
-        // Sign all commitments individually:
-        bool signature_success = sign_commitments_with_ecdsa(com, chunk_len, "private_key.pem", pc);
-        if (signature_success) {
-            cout << "Created signatures: " << get_signature_info() << endl;
-        }
+        // // Sign all commitments individually:
+        // bool signature_success = sign_commitments_with_ecdsa(com, chunk_len, "private_key.pem", pc);
+        // if (signature_success) {
+        //     cout << "Created signatures: " << get_signature_info() << endl;
+        // }
 
         BN_free(yMAC);
         EC_POINT_free(com_y);
@@ -598,11 +598,11 @@ class ComConv {
         io->send_block(&yMAC_seed, 1);
         send_bn(io, yMAC);
 
-        // Verify signatures
-        bool verified = verify_commitment_signature(com, chunk_len, "public_key.pem", pc);
-        if (verified) {
-            cout << "Verified signatures: " << get_signature_info() << endl;
-        }
+        // // Verify signatures
+        // bool verified = verify_commitment_signature(com, chunk_len, "public_key.pem", pc);
+        // if (verified) {
+        //     cout << "Verified signatures: " << get_signature_info() << endl;
+        // }
 
         for (size_t i = 0; i < chunk_len; i++) {
             BN_free(batch_aMACs[i]);
