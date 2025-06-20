@@ -153,9 +153,7 @@ void com_conv_test(
         cout << "BOB comm: " << io->counter - comm << " bytes" << endl;
     } else {
         auto start = emp::clock_start();
-        auto result = conv.compute_com_recv(coms, rnds, raw, pc, batch_size);
-        bool res = result.first;
-        vector<BIGNUM*> msg = result.second;
+        auto [res, msg, signatures_der, signature_lengths] = conv.compute_com_recv(coms, rnds, raw, pc, batch_size);
         
         if (res) {
             cout << "ALICE check passed" << endl;
@@ -165,6 +163,16 @@ void com_conv_test(
         cout << "ALICE time: " << emp::time_from(start) << " us" << endl;
         cout << "ALICE comms: " << io->counter - comm << " bytes" << endl;
     
+
+        // Write all signatures to file (overwrite mode to match commitments.bin behavior)
+        std::ofstream sig_file("shared_bin/signatures.bin", std::ios::binary);
+        for (size_t i = 0; i < signatures_der.size(); i++) {
+            sig_file.write(reinterpret_cast<const char*>(&signature_lengths[i]), sizeof(int));
+            sig_file.write(reinterpret_cast<const char*>(signatures_der[i]), signature_lengths[i]);
+        }
+        sig_file.close();
+        cout << "ALICE: Written " << signatures_der.size() << " signatures to signatures.bin" << endl;
+
         // Write the commitments to file
         std::ofstream binary_file("shared_bin/commitments.bin", std::ios::binary);
         int compressed_size = ec_size_bin(coms[0], 1);
@@ -175,6 +183,7 @@ void com_conv_test(
         }
         delete(buf);
         binary_file.close();
+        cout << "ALICE: Written " << chunk_len << " commitments to commitments.bin" << endl;
 
         // Write messages to file
         std::ofstream msg_file("shared_bin/messages.bin", std::ios::binary);
@@ -284,7 +293,7 @@ int main(int argc, char** argv) {
         fcot = ((ZKVerifier<NetIO>*)(zk_prot_buf))->ostriple->ferret;
     }
 
-    size_t array_len = 4 * 1024 * 8;
+    size_t array_len = 2 * 1024 * 8;
     PRG prg;
     unsigned char* val = new unsigned char[array_len / 8];
     prg.random_data(val, array_len / 8);

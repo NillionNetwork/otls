@@ -674,7 +674,7 @@ class ComConv {
         return res;
     }
 
-    std::pair<bool, vector<BIGNUM*>> compute_com_recv(ec_t* com,
+    std::tuple<bool, vector<BIGNUM*>, vector<unsigned char*>, vector<int>> compute_com_recv(ec_t* com,
                           vector<BIGNUM*>& rnds,
                           vector<block> bMACs,
                           RelicPedersenComm& pc,
@@ -884,8 +884,9 @@ class ComConv {
 
 
         // Verify signatures
-        bool verified = verify_commitment_signature(com, chunk_len, "public_key.pem");
-        if (verified) {
+        bool debug_signatures = false;
+        auto [verified, signatures, signature_lengths] = receive_commitment_signature(com, chunk_len, "public_key.pem", debug_signatures);
+        if (debug_signatures) {
             cout << "Verified signatures: " << get_signature_info() << endl;
         }
         res = res and verified;
@@ -922,7 +923,7 @@ class ComConv {
             BN_free(aMACs[i]);
         }
 
-        return std::make_pair(res, msg);
+        return std::make_tuple(res, msg, signatures, signature_lengths);
     }
 
     /**
@@ -1022,7 +1023,7 @@ class ComConv {
         int num_signatures = signatures_der.size();
         io->send_data(&num_signatures, sizeof(int));
 
-        // 4. Send each signature
+        // 4. Send each signature individually
         for (size_t i = 0; i < signatures_der.size(); i++) {
             io->send_data(&signature_lengths[i], sizeof(int));
             io->send_data(signatures_der[i], signature_lengths[i]);
@@ -1036,17 +1037,22 @@ class ComConv {
     }
 
     /**
-     * Verifies individual signatures for each commitment using a public key from file
+     * Receives individual signatures for each commitment
      * 
      * @param com Commitment points that were signed
      * @param chunk_len Length of the commitment vector
      * @param key_path Path to the PEM file containing public key
-     * @return true if all signatures are valid, false otherwise
+     * @param verify Whether to verify the signatures
+     * @return tuple containing:
+     *   - bool: true if all signatures are valid, false otherwise
+     *   - vector<unsigned char*>: array of signatures
+     *   - vector<int>: lengths of signatures
      */
-    bool verify_commitment_signature(
+    std::tuple<bool, vector<unsigned char*>, vector<int>> receive_commitment_signature(
         const ec_t* com,
         size_t chunk_len,
-        const string& key_path
+        const string& key_path,
+        bool verify = false
     ) {
         // Clean up any previous signature data
         for (auto sig_der : signatures_der) {
@@ -1061,30 +1067,33 @@ class ComConv {
             public_key_len = 0;
         }
         
-        signatures_valid = false;
+        signatures_valid = !verify;
 
-        // 1. Load the public key from file
         EC_KEY* verify_key = nullptr;
-        FILE* key_file = fopen(key_path.c_str(), "r");
-        if (!key_file) {
-            fprintf(stderr, "Error: Could not open ECDSA public key file at %s\n", key_path.c_str());
-            return false;
-        }
+        
+        // Only load public key if verification is requested
+        if (verify) {
+            FILE* key_file = fopen(key_path.c_str(), "r");
+            if (!key_file) {
+                fprintf(stderr, "Error: Could not open ECDSA public key file at %s\n", key_path.c_str());
+                return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
+            }
 
-        verify_key = PEM_read_EC_PUBKEY(key_file, nullptr, nullptr, nullptr);
-        fclose(key_file);
+            verify_key = PEM_read_EC_PUBKEY(key_file, nullptr, nullptr, nullptr);
+            fclose(key_file);
 
-        if (!verify_key) {
-            fprintf(stderr, "Error: Invalid ECDSA public key format\n");
-            return false;
-        }
+            if (!verify_key) {
+                fprintf(stderr, "Error: Invalid ECDSA public key format\n");
+                return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
+            }
 
-        // Store the public key in the member variable for later use
-        public_key_len = i2o_ECPublicKey(verify_key, &public_key_bytes);
-        if (public_key_len <= 0) {
-            fprintf(stderr, "Error: Failed to export public key\n");
-            EC_KEY_free(verify_key);
-            return false;
+            // Store the public key in the member variable for later use
+            public_key_len = i2o_ECPublicKey(verify_key, &public_key_bytes);
+            if (public_key_len <= 0) {
+                fprintf(stderr, "Error: Failed to export public key\n");
+                EC_KEY_free(verify_key);
+                return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
+            }
         }
 
         // 2. Receive the number of signatures
@@ -1094,11 +1103,11 @@ class ComConv {
         if (num_signatures != (int)chunk_len) {
             fprintf(stderr, "Error: Number of signatures (%d) does not match number of commitments (%zu)\n", 
                     num_signatures, chunk_len);
-            EC_KEY_free(verify_key);
-            return false;
+            if (verify_key) EC_KEY_free(verify_key);
+            return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
         }
 
-        // 3. Receive and verify each signature
+        // 3. Receive each signature individually
         for (size_t i = 0; i < chunk_len; i++) {
             // Receive signature length and data
             int sig_len;
@@ -1107,7 +1116,7 @@ class ComConv {
             unsigned char* sig_der = (unsigned char*)OPENSSL_malloc(sig_len);
             if (!sig_der) {
                 fprintf(stderr, "Error: Memory allocation failed for signature %zu\n", i);
-                EC_KEY_free(verify_key);
+                if (verify_key) EC_KEY_free(verify_key);
                 
                 // Clean up any signatures we've received so far
                 for (auto stored_sig : signatures_der) {
@@ -1115,8 +1124,7 @@ class ComConv {
                 }
                 signatures_der.clear();
                 signature_lengths.clear();
-                
-                return false;
+                return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
             }
             
             io->recv_data(sig_der, sig_len);
@@ -1125,51 +1133,47 @@ class ComConv {
             signatures_der.push_back(sig_der);
             signature_lengths.push_back(sig_len);
             
-            // Convert the commitment to binary format
-            int compressed_size = ec_size_bin(com[0], 1);
-            unsigned char point_buffer[compressed_size];
-            ec_write_bin(point_buffer, compressed_size, com[i], 1);
-            
-            // Hash the commitment
-            Hash commitment_hash;
-            commitment_hash.put(point_buffer, compressed_size);
-            unsigned char digest[Hash::DIGEST_SIZE];
-            commitment_hash.digest(digest);
-            
-            // Parse the signature
-            ECDSA_SIG* signature = nullptr;
-            const unsigned char* sig_ptr = sig_der;
-            signature = d2i_ECDSA_SIG(&signature, &sig_ptr, sig_len);
-            if (!signature) {
-                fprintf(stderr, "Error: Failed to parse signature for commitment %zu\n", i);
-                EC_KEY_free(verify_key);
-                return false;
-            }
-            
-            // Verify the signature
-            int verify_result = ECDSA_do_verify(digest, Hash::DIGEST_SIZE, signature, verify_key);
-            ECDSA_SIG_free(signature);
-            
-            if (verify_result != 1) {
-                fprintf(stderr, "Error: Signature verification failed for commitment %zu\n", i);
-                EC_KEY_free(verify_key);
-                return false;
+            // Only verify if verification is requested
+            if (verify) {
+                // Convert the commitment to binary format
+                int compressed_size = ec_size_bin(com[0], 1);
+                unsigned char point_buffer[compressed_size];
+                ec_write_bin(point_buffer, compressed_size, com[i], 1);
+                
+                // Hash the commitment
+                Hash commitment_hash;
+                commitment_hash.put(point_buffer, compressed_size);
+                unsigned char digest[Hash::DIGEST_SIZE];
+                commitment_hash.digest(digest);
+                
+                // Parse the signature
+                ECDSA_SIG* signature = nullptr;
+                const unsigned char* sig_ptr = sig_der;
+                signature = d2i_ECDSA_SIG(&signature, &sig_ptr, sig_len);
+                if (!signature) {
+                    fprintf(stderr, "Error: Failed to parse signature for commitment %zu\n", i);
+                    EC_KEY_free(verify_key);
+                    return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
+                }
+                
+                // Verify the signature
+                int verify_result = ECDSA_do_verify(digest, Hash::DIGEST_SIZE, signature, verify_key);
+                ECDSA_SIG_free(signature);
+                
+                if (verify_result != 1) {
+                    fprintf(stderr, "Error: Signature verification failed for commitment %zu\n", i);
+                    EC_KEY_free(verify_key);
+                    return std::make_tuple(false, vector<unsigned char*>(), vector<int>());
+                } else {
+                    signatures_valid = true;
+                }
             }
         }
 
-        // Write all signatures to file (overwrite mode to match commitments.bin behavior)
-        std::ofstream sig_file("shared_bin/signatures.bin", std::ios::binary);
-        for (size_t i = 0; i < signatures_der.size(); i++) {
-            sig_file.write(reinterpret_cast<const char*>(&signature_lengths[i]), sizeof(int));
-            sig_file.write(reinterpret_cast<const char*>(signatures_der[i]), signature_lengths[i]);
-        }
-        sig_file.close();
-
-        // 4. Clean up resources
-        EC_KEY_free(verify_key);
+        // Clean up resources
+        if (verify_key) EC_KEY_free(verify_key);
         
-        signatures_valid = true;
-        return true;
+        return std::make_tuple(signatures_valid, signatures_der, signature_lengths);
     }
 
     /**
