@@ -2,6 +2,31 @@ cmake_minimum_required (VERSION 3.0)
 project (otls)
 set(NAME "otls")
 
+# Find and configure RELIC
+find_path(RELIC_INCLUDE_DIR relic.h
+    PATHS
+    /opt/relic-target/include
+    /usr/local/include
+    /usr/include
+    /opt/relic/include
+)
+
+# Look for the static library
+find_library(RELIC_LIBRARY relic_s
+    PATHS
+    /opt/relic-target/lib
+    /usr/local/lib
+    /usr/lib
+    /opt/relic/lib
+)
+
+if(NOT RELIC_INCLUDE_DIR OR NOT RELIC_LIBRARY)
+    message(FATAL_ERROR "RELIC not found! Please check your RELIC installation.")
+endif()
+
+include_directories(${RELIC_INCLUDE_DIR})
+message(STATUS "Found RELIC: ${RELIC_LIBRARY}")
+
 IF(ENABLE_WASM)
   set(CMAKE_FOLDER ${CMAKE_INSTALL_PREFIX})
   include(${CMAKE_FOLDER}/cmake/emp-base.cmake)
@@ -54,7 +79,7 @@ add_library(otls ${sources})
 ELSE()
 add_library(otls SHARED ${sources})
 ENDIF()
-target_link_libraries(otls ${EMP-TOOL_LIBRARIES} ${EMP-ZK_LIBRARIES} dl)
+target_link_libraries(otls ${EMP-TOOL_LIBRARIES} ${EMP-ZK_LIBRARIES} ${RELIC_LIBRARY} gmp ssl crypto dl)
 
 install(FILES cmake/otls-config.cmake DESTINATION cmake/)
 install(TARGETS otls DESTINATION lib)

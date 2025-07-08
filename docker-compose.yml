@@ -5,11 +5,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        RELIC_CURVE: ${RELIC_CURVE:-Ed25519}  # Default to Ed25519 if not set
+        BUILD_ON_MAC: "no"
     volumes:
       - ./:/opt/primus/otls
     ports:
-      - "12345:12345"
+      - "12345-12350:12345-12350"
     working_dir: /opt/primus/otls
     command: /bin/bash
     stdin_open: true
-    tty: true 
+    tty: true
