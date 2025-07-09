@@ -102,10 +102,11 @@ void com_conv_test(
     for (size_t i = 0; i < raw.size(); i++)
         raw[i] = input[i].bit;
 
-    // Edwards curve does not support 255 batch size because
-    // the prime size is <255 bits. We are making it 252 instead 
-    // as it is the biggest batch size bs such that 2^bs < q (the size of the curve).
-    size_t batch_size = 252;
+    // In the fhe mode, we are only picking 4 bits because we will batch them together in just
+    // one block. This simulates the case where we pick one block of bits to be fhe encrypted 
+    // while redacting the rest. Thus, we define the batch size to be 4 and total array length
+    // to be 4 as well.
+    size_t batch_size = 4;
     size_t chunk_len = (array_len + batch_size - 1) / batch_size;
     // vector<EC_POINT*> coms;
     vector<BIGNUM*> rnds;
@@ -298,7 +299,12 @@ int main(int argc, char** argv) {
         fcot = ((ZKVerifier<NetIO>*)(zk_prot_buf))->ostriple->ferret;
     }
 
-    size_t array_len = 2 * 1024 * 8;
+    // size_t array_len = 2 * 1024 * 8;
+    // In the fhe mode, we are only picking 4 bits because we will batch them together in just
+    // one block. This simulates the case where we pick one block of bits to be fhe encrypted 
+    // while redacting the rest. Thus, we define the batch size to be 4 and total array length
+    // to be 4 as well.
+    size_t array_len = 4;
     PRG prg;
     unsigned char* val = new unsigned char[array_len / 8];
     prg.random_data(val, array_len / 8);
